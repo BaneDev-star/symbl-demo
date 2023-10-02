@@ -1,68 +1,105 @@
-import { Symbl } from '@symblai/symbl-web-sdk';
+import { AudioMutedOutlined, AudioOutlined } from '@ant-design/icons';
+import { Button } from 'antd';
+import { useEffect, useState } from 'react';
+import { useReactMediaRecorder, ReactMediaRecorder } from "react-media-recorder";
+import { io } from 'socket.io-client'
+
 import './App.css';
-import { useState } from 'react';
-import { Button, List, Avatar } from 'antd';
-import { AudioOutlined, AudioMutedOutlined } from '@ant-design/icons';
+import API from './api/api'
 
 function App() {
-  const [conversationId, setConversationId] = useState(null)
-  const [symblConn, setSymblConn] = useState(null)
-  const [transcripts, setTranscripts] = useState([])
+  const [isActive, setActive] = useState(false)
+  const [stream, setStream] = useState()
+  const [socket, setSocket] = useState()
 
-  const startConversation = async () => {
-    try {
+  useEffect(() => {
+    const socket = io.connect('http://localhost:3001')
+    socket.on('connect', () => {
+      console.log('socket connected')
+    })
+    setSocket(socket)
+  }, [])
 
-      // Symbl recommends replacing the App ID and App Secret with an Access Token for authentication in production applications.
-      // For more information about authentication see https://docs.symbl.ai/docs/developer-tools/authentication/.
-      const symbl = new Symbl({
-        appId: process.env.REACT_APP_SYMBL_APP_ID,
-        appSecret: process.env.REACT_APP_SYMBL_APP_SECRET,
+  // const {
+  //   status,
+  //   startRecording,
+  //   stopRecording
+  // } = useReactMediaRecorder({
+  //   video: false,
+  //   audio: true,
+  //   echoCancellation: true,
+  //   onStop: (blobUrl, blob) => {
+  //     const audioFile = new File([blob], 'voice.wav', { type: 'audio/wav' });
+  //     const formData = new FormData(); // preparing to send to the server
+  //     formData.append('file', audioFile);  // preparing to send to the server    
+  //     API.onSpeech(formData);
+  //   },
+  //   askPermissionOnMount: true,
+  //   previewAudioStream: (stream) => {
+  //     console.log('stream', stream)
+  //   }
+  // })
+
+  const startRecording1 = (id) => {
+    socket.connect();
+    var partSize = 0, parts = [];
+    const MIN_BLOB_SIZE = 8192;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const mimeTypes = ["audio/webm"].filter((type) =>
+        MediaRecorder.isTypeSupported(type)
+      );
+
+      if (mimeTypes.length === 0) return alert("Browser not supported");
+      setActive(true);
+      setStream(stream);
+      let recorder = new MediaRecorder(stream, { mimeType: mimeTypes[0], audioBitsPerSecond: 128000 });
+      recorder.addEventListener("dataavailable", async (event) => {
+        console.log("cheking data available for send");
+        if (socket.connected) {
+          // socket.emit('speech', { data: event.data })
+          const blob = event.data;
+          partSize += blob.size;
+          parts.push(blob);
+          while (partSize >= MIN_BLOB_SIZE) {
+            let bigBlob = new Blob(parts, { type: blob.type });
+            let sizedBlob = bigBlob.slice(0, MIN_BLOB_SIZE, blob.type);
+            parts = [ bigBlob.slice(MIN_BLOB_SIZE, bigBlob.size, blob.type) ];
+            partSize = parts[0].size
+            console.log("sending audio = ", sizedBlob.size);
+            socket.emit('speech', { data: sizedBlob })
+          }
+        } else {
+          console.log("no data avialable");
+        }
       });
+      recorder.start(1000);
+    });
+  };
 
-      // Open a Streaming API WebSocket Connection and start processing audio from your input device.
-      const connection = await symbl.createAndStartNewConnection();
-      setSymblConn(connection);
-
-      // Retrieve the conversation ID for the conversation.
-      connection.on("conversation_created", (conversationData) => {
-        const conversationId = conversationData.data.conversationId;
-        setConversationId(conversationId);
-      });
-
-      connection.on("speech_recognition", (speechData) => {
-        const name = speechData.user ? speechData.user.name : "User";
-        const transcript = speechData.punctuated.transcript;
-        console.log(`${name}: `, speechData);
-        const newData = [...transcripts]
-        newData.push(transcript)
-        console.log('newData = ', transcripts)
-        setTranscripts(old => {
-          console.log('old = ', old)
-          return newData
-        })
-      });
-      // document.querySelector("#startButton").removeAttribute("disabled");
-    } catch (e) {
-      // Handle errors here.
+  const stopRecording = () => {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
     }
-  }
-
-  const stopConversation = async () => {
-    if (symblConn) {
-      await symblConn.stopProcessing();
-      symblConn.disconnect();
-      setSymblConn(null)
-      setConversationId(null)
-      setTranscripts([])
-    }
-  }
-
+    setActive(false);
+    console.log("Recording stopped");
+  };
 
   return (
     <div className="App">
       <h2>Symbl AI Demo Application</h2>
-      <Button type="primary" onClick={conversationId ? stopConversation : startConversation} shape="round" icon={conversationId ? <AudioMutedOutlined /> : <AudioOutlined />} size={'large'} />
-      <List
+      <Button
+        type="primary"
+        onClick={() => {
+          if (isActive) {
+            stopRecording()
+          } else {
+            startRecording1()
+          }
+          setActive(!isActive)
+        }}
+        shape="round"
+        icon={isActive ? <AudioMutedOutlined /> : <AudioOutlined />} size={'large'} />
+      {/* <List
         itemLayout="horizontal"
         dataSource={transcripts}
         renderItem={(item, index) => (
@@ -73,7 +110,7 @@ function App() {
             />
           </List.Item>
         )}
-      />
+      /> */}
     </div>
   );
 }
