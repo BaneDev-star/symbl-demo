@@ -1,87 +1,89 @@
 import { AudioMutedOutlined, AudioOutlined } from '@ant-design/icons';
 import { Button } from 'antd';
 import { useEffect, useState } from 'react';
-import { useReactMediaRecorder, ReactMediaRecorder } from "react-media-recorder";
-import { io } from 'socket.io-client'
+import RecordRTC from 'recordrtc';
+import { io } from 'socket.io-client';
 
 import './App.css';
-import API from './api/api'
 
 function App() {
   const [isActive, setActive] = useState(false)
-  const [stream, setStream] = useState()
   const [socket, setSocket] = useState()
 
+  const [recorder, setRecorder] = useState(null)
+
+  const [finalSpeechText, setFinalSpeechText] = useState([])
+  const [speechingText, setSpeechingText] = useState('')
+
   useEffect(() => {
-    const socket = io.connect('http://localhost:3001')
+    const socket = io.connect('https://zingy-alpaca-cadd17.netlify.app:3001')
     socket.on('connect', () => {
       console.log('socket connected')
     })
+    socket.on('speech-detect', onSpeechDetect)
     setSocket(socket)
+
+    return () => {
+      socket.disconnect()
+    }
   }, [])
 
-  // const {
-  //   status,
-  //   startRecording,
-  //   stopRecording
-  // } = useReactMediaRecorder({
-  //   video: false,
-  //   audio: true,
-  //   echoCancellation: true,
-  //   onStop: (blobUrl, blob) => {
-  //     const audioFile = new File([blob], 'voice.wav', { type: 'audio/wav' });
-  //     const formData = new FormData(); // preparing to send to the server
-  //     formData.append('file', audioFile);  // preparing to send to the server    
-  //     API.onSpeech(formData);
-  //   },
-  //   askPermissionOnMount: true,
-  //   previewAudioStream: (stream) => {
-  //     console.log('stream', stream)
-  //   }
-  // })
+  const onSpeechDetect = ({ data }) => {
+    console.log('speech-detect', data)
+    if (data.isFinal) {
+      setSpeechingText('')
+      setFinalSpeechText((prev) => {
+        return [...prev, data.punctuated.transcript]
+      })
+    } else {
+      setSpeechingText(data.punctuated.transcript)
+    }
+  }
 
-  const startRecording1 = (id) => {
-    socket.connect();
-    var partSize = 0, parts = [];
-    const MIN_BLOB_SIZE = 8192;
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const mimeTypes = ["audio/webm"].filter((type) =>
-        MediaRecorder.isTypeSupported(type)
-      );
-
-      if (mimeTypes.length === 0) return alert("Browser not supported");
-      setActive(true);
-      setStream(stream);
-      let recorder = new MediaRecorder(stream, { mimeType: mimeTypes[0], audioBitsPerSecond: 128000 });
-      recorder.addEventListener("dataavailable", async (event) => {
-        console.log("cheking data available for send");
-        if (socket.connected) {
-          // socket.emit('speech', { data: event.data })
-          const blob = event.data;
-          partSize += blob.size;
-          parts.push(blob);
-          while (partSize >= MIN_BLOB_SIZE) {
-            let bigBlob = new Blob(parts, { type: blob.type });
-            let sizedBlob = bigBlob.slice(0, MIN_BLOB_SIZE, blob.type);
-            parts = [ bigBlob.slice(MIN_BLOB_SIZE, bigBlob.size, blob.type) ];
-            partSize = parts[0].size
-            console.log("sending audio = ", sizedBlob.size);
-            socket.emit('speech', { data: sizedBlob })
-          }
-        } else {
-          console.log("no data avialable");
+  const initStream = async () => {
+    var parts = [], partSize = 0;
+    let stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+    var StereoAudioRecorder = RecordRTC.StereoAudioRecorder;
+    let recorder = RecordRTC(stream, {
+      type: 'audio',
+      mimeType: 'audio/wav',
+      recorderType: StereoAudioRecorder,
+      disableLogs: false,
+      timeSlice: 300,
+      ondataavailable: async function (blob) {
+        parts.push(blob)
+        partSize += blob.size
+        let start = 0
+        let bigBlob = new Blob(parts, { type: blob.type })
+        while (partSize >= 8192) {
+          let sizedBlob = bigBlob.slice(start, start + 8192)
+          partSize -= 8192
+          start += 8192
+          socket.emit('speech', { data: sizedBlob })
         }
-      });
-      recorder.start(1000);
+        if (partSize > 0) {
+          const remainBlob = bigBlob.slice(start, start + partSize)
+          parts = [remainBlob]
+        } else {
+          parts = []
+        }
+      },
+      bufferSize: 8192,
+      desiredSampRate: 16000,
+      numberOfAudioChannels: 1,
     });
+    return recorder;
+  }
+
+  const startRecording = async () => {
+    socket.connect();
+    const recorder = await initStream()
+    setRecorder(recorder)
+    recorder.startRecording();
   };
 
-  const stopRecording = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    setActive(false);
-    console.log("Recording stopped");
+  const stopRecording = async () => {
+    recorder.stopRecording()
   };
 
   return (
@@ -89,28 +91,23 @@ function App() {
       <h2>Symbl AI Demo Application</h2>
       <Button
         type="primary"
+        disabled={!socket}
         onClick={() => {
           if (isActive) {
             stopRecording()
           } else {
-            startRecording1()
+            startRecording()
           }
           setActive(!isActive)
         }}
         shape="round"
         icon={isActive ? <AudioMutedOutlined /> : <AudioOutlined />} size={'large'} />
-      {/* <List
-        itemLayout="horizontal"
-        dataSource={transcripts}
-        renderItem={(item, index) => (
-          <List.Item>
-            <List.Item.Meta
-              avatar={<Avatar src={`https://xsgames.co/randomusers/avatar.php?g=pixel&key=${index}`} />}
-              title={<a href="https://ant.design">{item}</a>}
-            />
-          </List.Item>
-        )}
-      /> */}
+
+      <h3>Speech Detection</h3>
+      <div className='speech-detect'>
+        <span className='final-text'>{finalSpeechText.join(' ')}</span>
+        <span className='speeching-text'>{speechingText}</span>
+      </div>
     </div>
   );
 }
