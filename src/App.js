@@ -16,7 +16,7 @@ function App() {
   const [speechingText, setSpeechingText] = useState('')
 
   useEffect(() => {
-    const socket = io.connect('https://zingy-alpaca-cadd17.netlify.app:3001')
+    const socket = io.connect(process.env.REACT_APP_SERVER_URL)
     socket.on('connect', () => {
       console.log('socket connected')
     })
